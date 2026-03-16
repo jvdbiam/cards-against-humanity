@@ -57,18 +57,46 @@ manager = ConnectionManager()
 # Spel status
 game_state = {
     "current_black_card": None,
-    "players": {},
-    "round_in_progress": False
+    "players": {},  # player_id -> {name, hand, score}
+    "player_order": [],  # List to track player order for consistent username assignment
+    "round_in_progress": False,
+    "submitted_cards": {},  # player_id -> card
+    "card_to_player": {},  # card -> player_id (for scoring)
+    "revealed": False,
+    "votes": {}  # player_id -> card_index (who voted for which card)
 }
 
 def start_new_round():
     """Start een nieuwe ronde met een nieuwe zwarte kaart"""
     game_state["current_black_card"] = get_random_black_card()
     game_state["round_in_progress"] = True
+    game_state["submitted_cards"] = {}
+    game_state["card_to_player"] = {}
+    game_state["revealed"] = False
+    game_state["votes"] = {}
     # Geef elke speler nieuwe witte kaarten
     for player_id in game_state["players"]:
         game_state["players"][player_id]["hand"] = get_random_white_cards(5)
     return game_state["current_black_card"]
+
+def get_scoreboard():
+    """Get the current scoreboard"""
+    scoreboard = []
+    for player_id in game_state["player_order"]:
+        if player_id in game_state["players"]:
+            player = game_state["players"][player_id]
+            scoreboard.append({
+                "id": player_id,
+                "name": player["name"],
+                "score": player["score"]
+            })
+    return scoreboard
+
+def all_players_submitted():
+    """Check of alle spelers hun kaart hebben ingediend"""
+    if len(game_state["players"]) == 0:
+        return False
+    return len(game_state["submitted_cards"]) == len(game_state["players"])
 
 @app.get("/")
 async def get():
@@ -99,20 +127,40 @@ async def get_game_state():
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     player_id = str(id(websocket))
-    game_state["players"][player_id] = {"hand": get_random_white_cards(5)}
+    player_number = len(game_state["player_order"]) + 1
+    player_name = f"Speler {player_number}"
+    
+    game_state["players"][player_id] = {
+        "hand": get_random_white_cards(5),
+        "name": player_name,
+        "score": 0
+    }
+    game_state["player_order"].append(player_id)
     
     try:
         # Stuur de huidige zwarte kaart en hand naar de nieuwe speler
+        initial_data = {
+            "type": "game_state",
+            "player_id": player_id,
+            "player_name": player_name,
+            "player_count": len(game_state["players"]),
+            "scoreboard": get_scoreboard(),
+            "submitted_count": len(game_state["submitted_cards"])
+        }
         if game_state["current_black_card"]:
-            await websocket.send_text(json.dumps({
-                "type": "game_state",
-                "black_card": game_state["current_black_card"],
-                "hand": game_state["players"][player_id]["hand"]
-            }))
+            initial_data["black_card"] = game_state["current_black_card"]
+            initial_data["hand"] = game_state["players"][player_id]["hand"]
+            initial_data["revealed"] = game_state["revealed"]
+            initial_data["submitted_cards"] = list(game_state["submitted_cards"].values()) if game_state["revealed"] else []
+        
+        await websocket.send_text(json.dumps(initial_data))
         
         await manager.broadcast(json.dumps({
             "type": "player_joined",
-            "message": f"Nieuwe speler! Totaal: {len(game_state['players'])} spelers"
+            "message": f"Nieuwe speler ({player_name}) is toegetreden!",
+            "player_count": len(game_state["players"]),
+            "submitted_count": len(game_state["submitted_cards"]),
+            "scoreboard": get_scoreboard()
         }))
         
         while True:
@@ -120,13 +168,93 @@ async def websocket_endpoint(websocket: WebSocket):
             message = json.loads(data)
             
             if message.get("type") == "play_card":
-                # Speler speelt een kaart
+                # Speler dient een kaart in
                 card_text = message.get("card")
+                
+                # Check of speler al een kaart heeft ingediend
+                if player_id in game_state["submitted_cards"]:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "message": "Je hebt al een kaart ingediend!"
+                    }))
+                    continue
+                
+                # Sla de ingediende kaart op
+                game_state["submitted_cards"][player_id] = card_text
+                
+                # Verwijder de kaart uit de hand van de speler
+                if card_text in game_state["players"][player_id]["hand"]:
+                    game_state["players"][player_id]["hand"].remove(card_text)
+                
+                # Update iedereen over de voortgang
                 await manager.broadcast(json.dumps({
-                    "type": "card_played",
-                    "card": card_text,
-                    "player": player_id
+                    "type": "card_submitted",
+                    "submitted_count": len(game_state["submitted_cards"]),
+                    "player_count": len(game_state["players"]),
+                    "scoreboard": get_scoreboard()
                 }))
+                
+                # Check of iedereen heeft ingediend
+                if all_players_submitted():
+                    game_state["revealed"] = True
+                    # Shuffle and reveal alle kaarten
+                    shuffled_cards = list(game_state["submitted_cards"].values())
+                    random.shuffle(shuffled_cards)
+                    # Create card info with player ids
+                    card_info = []
+                    for card in shuffled_cards:
+                        # Find which player submitted this card
+                        player_who_submitted = None
+                        for pid, submitted_card in game_state["submitted_cards"].items():
+                            if submitted_card == card:
+                                player_who_submitted = pid
+                                game_state["card_to_player"][card] = pid
+                                break
+                        card_info.append({
+                            "card": card,
+                            "player_id": player_who_submitted
+                        })
+                    await manager.broadcast(json.dumps({
+                        "type": "reveal",
+                        "cards": card_info
+                    }))
+            
+            elif message.get("type") == "vote_card":
+                # Speler stemt voor een kaart
+                card_text = message.get("card")
+                
+                # Check if card was submitted by another player
+                if card_text in game_state["card_to_player"]:
+                    winner_id = game_state["card_to_player"][card_text]
+                    # Prevent voting for your own card
+                    if winner_id != player_id and player_id not in game_state["votes"]:
+                        game_state["votes"][player_id] = card_text
+                        
+                        # Award point to the submitter
+                        if winner_id in game_state["players"]:
+                            game_state["players"][winner_id]["score"] += 1
+                        
+                        # Check if everyone has voted
+                        if len(game_state["votes"]) == len(game_state["players"]) - 1:  # Everyone except the judge
+                            # Find the winning card
+                            vote_counts = {}
+                            for voted_card in game_state["votes"].values():
+                                vote_counts[voted_card] = vote_counts.get(voted_card, 0) + 1
+                            
+                            winning_card = max(vote_counts, key=vote_counts.get)
+                            winning_player = game_state["card_to_player"].get(winning_card)
+                            
+                            await manager.broadcast(json.dumps({
+                                "type": "round_end",
+                                "winning_card": winning_card,
+                                "winning_player": game_state["players"][winning_player]["name"] if winning_player in game_state["players"] else "Unknown",
+                                "scoreboard": get_scoreboard()
+                            }))
+                    elif winner_id == player_id:
+                        await websocket.send_text(json.dumps({
+                            "type": "error",
+                            "message": "Je kunt niet op je eigen kaart stemmen!"
+                        }))
             
             elif message.get("type") == "new_round":
                 # Start een nieuwe ronde
@@ -138,7 +266,10 @@ async def websocket_endpoint(websocket: WebSocket):
                         await conn.send_text(json.dumps({
                             "type": "new_round",
                             "black_card": black_card,
-                            "hand": game_state["players"][pid]["hand"]
+                            "hand": game_state["players"][pid]["hand"],
+                            "submitted_count": 0,
+                            "player_count": len(game_state["players"]),
+                            "scoreboard": get_scoreboard()
                         }))
             
             elif message.get("type") == "get_hand":
@@ -152,7 +283,16 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
         if player_id in game_state["players"]:
             del game_state["players"][player_id]
+        if player_id in game_state["player_order"]:
+            game_state["player_order"].remove(player_id)
+        if player_id in game_state["submitted_cards"]:
+            del game_state["submitted_cards"][player_id]
+        if player_id in game_state["votes"]:
+            del game_state["votes"][player_id]
         await manager.broadcast(json.dumps({
             "type": "player_left",
-            "message": f"Een speler heeft de kamer verlaten. Totaal: {len(game_state['players'])} spelers"
+            "message": f"Een speler heeft de kamer verlaten. Totaal: {len(game_state['players'])} spelers",
+            "player_count": len(game_state["players"]),
+            "submitted_count": len(game_state["submitted_cards"]),
+            "scoreboard": get_scoreboard()
         }))
