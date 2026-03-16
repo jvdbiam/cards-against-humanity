@@ -385,11 +385,14 @@
                     revealCardsWithPlayerInfo(data.cards);
                     break;
                 case 'round_end':
-                    announce(`${data.winning_player} wint de ronde met hun kaart!`);
+                    announce(`${data.winning_player} wint de ronde met hun kaart! (${data.winning_votes} stem${data.winning_votes !== 1 ? 'men' : ''})`);
                     updateScoreboard(data.scoreboard);
                     setTimeout(() => {
                         hidePlayedCards();
-                    }, 3000);
+                    }, 4000);
+                    break;
+                case 'vote_received':
+                    announce(`${data.votes_so_far} van ${data.total_voters} spelers hebben gestemd`);
                     break;
                 case 'player_joined':
                 case 'player_left':
@@ -455,6 +458,10 @@
             cardDiv.setAttribute('aria-label', `Kaart ${index + 1}: ${extractCardText(card)}`);
             cardDiv.setAttribute('tabindex', '0');
             
+            // Create a container for the content
+            const contentDiv = document.createElement('div');
+            contentDiv.style.cssText = 'width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;';
+            
             // Check if it's an image card
             if (card.includes('[img]')) {
                 const imgMatch = card.match(/\[img\](.*?)\[\/img\]/);
@@ -463,15 +470,22 @@
                     img.src = imgMatch[1];
                     img.className = 'img-card';
                     img.alt = `Afbeelding voor kaart ${index + 1}`;
+                    img.style.cssText = 'max-width: 100%; max-height: 100%;';
                     img.onerror = function() { 
                         this.style.display = 'none';
-                        cardDiv.insertAdjacentHTML('beforeend', '<span>🖼️ Afbeelding</span>');
+                        contentDiv.innerHTML = '<span>🖼️ Afbeelding</span>';
                     };
-                    cardDiv.appendChild(img);
+                    contentDiv.appendChild(img);
+                } else {
+                    contentDiv.innerHTML = '<span>🖼️ Afbeelding</span>';
                 }
             } else {
-                cardDiv.innerText = card;
+                const textSpan = document.createElement('span');
+                textSpan.textContent = card;
+                contentDiv.appendChild(textSpan);
             }
+            
+            cardDiv.appendChild(contentDiv);
             
             // Click and keyboard handlers
             cardDiv.onclick = () => selectCard(index);
@@ -483,12 +497,12 @@
                 // Arrow keys navigation
                 if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
                     e.preventDefault();
-                    const cards = document.querySelectorAll('.hand button');
+                    const cards = document.querySelectorAll('.hand .white-card');
                     if (index < cards.length - 1) cards[index + 1].focus();
                 }
                 if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
                     e.preventDefault();
-                    const cards = document.querySelectorAll('.hand button');
+                    const cards = document.querySelectorAll('.hand .white-card');
                     if (index > 0) cards[index - 1].focus();
                 }
             };
@@ -559,27 +573,30 @@
         }
 
         function playSelectedCard() {
-            if (selectedCard && ws && !hasSubmitted) {
-                ws.send(JSON.stringify({
-                    type: 'play_card',
-                    card: selectedCard
-                }));
-                
-                announce(`Kaart ingediend: ${extractCardText(selectedCard)}`);
-                hasSubmitted = true;
-                selectedCard = null;
-                selectedCardIndex = null;
-                
-                const playBtn = document.getElementById('playBtn');
-                playBtn.disabled = true;
-                playBtn.setAttribute('aria-disabled', 'true');
-                
-                // Show waiting overlay
-                showWaitingOverlay();
-                
-                // Update hand display
-                renderHand();
+            if (!selectedCard || !ws || hasSubmitted) {
+                announce('Selecteer eerst een kaart!');
+                return;
             }
+            
+            ws.send(JSON.stringify({
+                type: 'play_card',
+                card: selectedCard
+            }));
+            
+            announce(`Kaart ingediend: ${extractCardText(selectedCard)}`);
+            hasSubmitted = true;
+            selectedCard = null;
+            selectedCardIndex = null;
+            
+            const playBtn = document.getElementById('playBtn');
+            playBtn.disabled = true;
+            playBtn.setAttribute('aria-disabled', 'true');
+            
+            // Show waiting overlay
+            showWaitingOverlay();
+            
+            // Update hand display
+            renderHand();
         }
 
         function showWaitingOverlay() {
@@ -671,13 +688,22 @@
         }
 
         function voteForCard(card) {
-            if (ws && hasSubmitted) {
-                ws.send(JSON.stringify({
-                    type: 'vote_card',
-                    card: card
-                }));
-                announce(`Je hebt gestemd op: ${extractCardText(card)}`);
+            if (!ws || !hasSubmitted) {
+                announce('Je moet eerst een kaart indienen voor je kan stemmen!');
+                return;
             }
+            
+            // Disable voting on all cards after voting
+            document.querySelectorAll('.played-card.voting').forEach(c => {
+                c.style.pointerEvents = 'none';
+                c.style.opacity = '0.6';
+            });
+            
+            ws.send(JSON.stringify({
+                type: 'vote_card',
+                card: card
+            }));
+            announce(`Je hebt gestemd op: ${extractCardText(card)}`);
         }
 
         // Keep old function for backward compatibility

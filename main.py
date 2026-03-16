@@ -227,30 +227,46 @@ async def websocket_endpoint(websocket: WebSocket):
                 if card_text in game_state["card_to_player"]:
                     winner_id = game_state["card_to_player"][card_text]
                     # Prevent voting for your own card
-                    if winner_id != player_id and player_id not in game_state["votes"]:
-                        game_state["votes"][player_id] = card_text
-                        
-                        # Award point to the submitter
-                        if winner_id in game_state["players"]:
-                            game_state["players"][winner_id]["score"] += 1
-                        
-                        # Check if everyone has voted
-                        if len(game_state["votes"]) == len(game_state["players"]) - 1:  # Everyone except the judge
-                            # Find the winning card
-                            vote_counts = {}
-                            for voted_card in game_state["votes"].values():
-                                vote_counts[voted_card] = vote_counts.get(voted_card, 0) + 1
+                    if winner_id != player_id:
+                        if player_id not in game_state["votes"]:
+                            game_state["votes"][player_id] = card_text
                             
-                            winning_card = max(vote_counts, key=vote_counts.get)
-                            winning_player = game_state["card_to_player"].get(winning_card)
-                            
+                            # Broadcast that someone voted
                             await manager.broadcast(json.dumps({
-                                "type": "round_end",
-                                "winning_card": winning_card,
-                                "winning_player": game_state["players"][winning_player]["name"] if winning_player in game_state["players"] else "Unknown",
-                                "scoreboard": get_scoreboard()
+                                "type": "vote_received",
+                                "votes_so_far": len(game_state["votes"]),
+                                "total_voters": len(game_state["submitted_cards"])
                             }))
-                    elif winner_id == player_id:
+                            
+                            # Check if everyone has voted
+                            # Number of votes should equal number of cards submitted (each player votes once)
+                            players_who_submitted = len(game_state["submitted_cards"])
+                            if len(game_state["votes"]) == players_who_submitted:
+                                # Find the card with the most votes
+                                vote_counts = {}
+                                for voted_card in game_state["votes"].values():
+                                    vote_counts[voted_card] = vote_counts.get(voted_card, 0) + 1
+                                
+                                # Award points to the player whose card got the most votes
+                                winning_card = max(vote_counts, key=vote_counts.get)
+                                winning_player_id = game_state["card_to_player"].get(winning_card)
+                                
+                                if winning_player_id in game_state["players"]:
+                                    game_state["players"][winning_player_id]["score"] += 1
+                                
+                                await manager.broadcast(json.dumps({
+                                    "type": "round_end",
+                                    "winning_card": winning_card,
+                                    "winning_player": game_state["players"][winning_player_id]["name"],
+                                    "winning_votes": vote_counts[winning_card],
+                                    "scoreboard": get_scoreboard()
+                                }))
+                        else:
+                            await websocket.send_text(json.dumps({
+                                "type": "error",
+                                "message": "Je hebt al gestemd!"
+                            }))
+                    else:
                         await websocket.send_text(json.dumps({
                             "type": "error",
                             "message": "Je kunt niet op je eigen kaart stemmen!"
