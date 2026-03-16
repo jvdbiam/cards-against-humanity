@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cards Against Humanity</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { 
+            font-family: 'Segoe UI', sans-serif; 
+            padding: 20px; 
+            line-height: 1.6;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+        }
+        header { text-align: center; margin-bottom: 30px; }
+        header h1 { 
+            font-size: 2.5rem; 
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+        .card-area { 
+            max-width: 600px; 
+            margin: 0 auto 30px; 
+        }
+        .black-card { 
+            background: #000; 
+            color: #fff; 
+            padding: 25px; 
+            border-radius: 12px;
+            font-size: 1.3rem;
+            min-height: 150px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border: 3px solid #333;
+        }
+        .hand-area {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .hand-area h2 {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .hand {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            justify-content: center;
+        }
+        .white-card {
+            background: #fff;
+            color: #000;
+            padding: 20px;
+            border-radius: 10px;
+            width: 180px;
+            min-height: 120px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            font-size: 0.95rem;
+        }
+        .white-card:hover {
+            transform: translateY(-10px) scale(1.05);
+            box-shadow: 0 15px 30px rgba(0,0,0,0.4);
+        }
+        .white-card.selected {
+            background: #4CAF50;
+            color: #fff;
+            transform: translateY(-10px);
+        }
+        .controls {
+            text-align: center;
+            margin: 30px 0;
+        }
+        .btn {
+            background: #e94560;
+            color: #fff;
+            border: none;
+            padding: 15px 30px;
+            font-size: 1.1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 0 10px;
+        }
+        .btn:hover {
+            background: #ff6b6b;
+            transform: scale(1.05);
+        }
+        .btn:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
+        #status-update {
+            text-align: center;
+            font-style: italic;
+            margin-bottom: 20px;
+            padding: 10px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 8px;
+        }
+        #played-cards {
+            max-width: 600px;
+            margin: 30px auto;
+            padding: 20px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+        }
+        #played-cards h3 { text-align: center; }
+        .played-card {
+            background: #fff;
+            color: #000;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            text-align: center;
+        }
+        .img-card {
+            max-width: 100%;
+            max-height: 100px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>🃏 Cards Against Humanity</h1>
+    </header>
+
+    <main>
+        <section class="card-area">
+            <div class="black-card" id="current-question" aria-live="assertive">
+                Druk op "Nieuwe Ronde" om te beginnen!
+            </div>
+        </section>
+
+        <section aria-live="polite" id="status-update">
+            Verbinden met de server...
+        </section>
+
+        <section class="controls">
+            <button class="btn" onclick="startNewRound()">🔄 Nieuwe Ronde</button>
+            <button class="btn" id="playBtn" onclick="playSelectedCard()" disabled>✅ Speel Kaart</button>
+        </section>
+
+        <section class="hand-area">
+            <h2>🎴 Jouw Kaarten</h2>
+            <div class="hand" id="hand"></div>
+        </section>
+
+        <section id="played-cards" style="display: none;">
+            <h3>📜 Gespeelde Kaarten</h3>
+            <div id="played-list"></div>
+        </section>
+    </main>
+
+    <script>
+        let ws;
+        let myHand = [];
+        let selectedCard = null;
+
+        function connect() {
+            ws = new WebSocket(`ws://${window.location.host}/ws`);
+
+            ws.onopen = () => {
+                document.getElementById('status-update').innerText = "✅ Verbonden met de kamer!";
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleMessage(data);
+            };
+
+            ws.onclose = () => {
+                document.getElementById('status-update').innerText = "❌ Verbinding verloren. Opnieuw verbinden...";
+                setTimeout(connect, 3000);
+            };
+        }
+
+        function handleMessage(data) {
+            switch(data.type) {
+                case 'game_state':
+                case 'new_round':
+                    document.getElementById('current-question').innerText = data.black_card;
+                    myHand = data.hand;
+                    renderHand();
+                    document.getElementById('played-cards').style.display = 'none';
+                    document.getElementById('played-list').innerHTML = '';
+                    break;
+                case 'hand':
+                    myHand = data.hand;
+                    renderHand();
+                    break;
+                case 'card_played':
+                    showPlayedCard(data.card);
+                    break;
+                case 'player_joined':
+                case 'player_left':
+                    document.getElementById('status-update').innerText = data.message;
+                    break;
+            }
+        }
+
+        function renderHand() {
+            const handDiv = document.getElementById('hand');
+            handDiv.innerHTML = '';
+            myHand.forEach((card, index) => {
+                const cardDiv = document.createElement('div');
+                cardDiv.className = 'white-card';
+                cardDiv.dataset.index = index;
+                
+                // Check if it's an image card
+                if (card.includes('[img]')) {
+                    const imgMatch = card.match(/\[img\](.*?)\[\/img\]/);
+                    if (imgMatch) {
+                        const img = document.createElement('img');
+                        img.src = imgMatch[1];
+                        img.className = 'img-card';
+                        img.onerror = () => { cardDiv.innerText = '🖼️ Afbeelding'; };
+                        cardDiv.appendChild(img);
+                    }
+                } else {
+                    cardDiv.innerText = card;
+                }
+                
+                cardDiv.onclick = () => selectCard(index);
+                handDiv.appendChild(cardDiv);
+            });
+        }
+
+        function selectCard(index) {
+            // Remove previous selection
+            document.querySelectorAll('.white-card').forEach(c => c.classList.remove('selected'));
+            // Select new card
+            selectedCard = myHand[index];
+            document.querySelector(`[data-index="${index}"]`).classList.add('selected');
+            document.getElementById('playBtn').disabled = false;
+        }
+
+        function playSelectedCard() {
+            if (selectedCard && ws) {
+                ws.send(JSON.stringify({
+                    type: 'play_card',
+                    card: selectedCard
+                }));
+                // Remove played card from hand
+                const index = myHand.indexOf(selectedCard);
+                if (index > -1) {
+                    myHand.splice(index, 1);
+                    renderHand();
+                }
+                selectedCard = null;
+                document.getElementById('playBtn').disabled = true;
+            }
+        }
+
+        function startNewRound() {
+            if (ws) {
+                ws.send(JSON.stringify({ type: 'new_round' }));
+            }
+        }
+
+        function showPlayedCard(card) {
+            const section = document.getElementById('played-cards');
+            section.style.display = 'block';
+            const list = document.getElementById('played-list');
+            const cardDiv = document.createElement('div');
+            cardDiv.className = 'played-card';
+            
+            if (card.includes('[img]')) {
+                const imgMatch = card.match(/\[img\](.*?)\[\/img\]/);
+                if (imgMatch) {
+                    const img = document.createElement('img');
+                    img.src = imgMatch[1];
+                    img.className = 'img-card';
+                    img.onerror = () => { cardDiv.innerText = '🖼️ Afbeelding'; };
+                    cardDiv.appendChild(img);
+                }
+            } else {
+                cardDiv.innerText = card;
+            }
+            
+            list.appendChild(cardDiv);
+        }
+
+        // Start verbinding
+        connect();
+    </script>
+</body>
+</html>
