@@ -219,6 +219,44 @@ async def websocket_endpoint(websocket: WebSocket):
                         "cards": card_info
                     }))
             
+            elif message.get("type") == "set_username":
+                # Handle username setting
+                username = message.get("username", "").strip()
+                
+                if not username:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "message": "Gebruikersnaam kan niet leeg zijn!"
+                    }))
+                    continue
+                
+                # Check if username is valid length
+                if len(username) > 20:
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "message": "Gebruikersnaam is te lang (max 20 tekens)!"
+                    }))
+                    continue
+                
+                # Update player name
+                game_state["players"][player_id]["name"] = username
+                
+                # Confirm to the player
+                await websocket.send_text(json.dumps({
+                    "type": "username_set",
+                    "success": True,
+                    "player_name": username
+                }))
+                
+                # Notify other players of the player's name
+                await manager.broadcast(json.dumps({
+                    "type": "player_joined",
+                    "message": f"Speler ({username}) is klaar!",
+                    "player_count": len(game_state["players"]),
+                    "submitted_count": len(game_state["submitted_cards"]),
+                    "scoreboard": get_scoreboard()
+                }))
+            
             elif message.get("type") == "vote_card":
                 # Speler stemt voor een kaart
                 card_text = message.get("card")

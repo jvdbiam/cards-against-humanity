@@ -256,6 +256,63 @@
             clip: rect(0,0,0,0);
             border: 0;
         }
+
+        .username-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .username-dialog {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+        }
+
+        .username-dialog h2 {
+            margin-top: 0;
+            margin-bottom: 15px;
+            color: #333;
+            font-size: 24px;
+        }
+
+        .username-dialog p {
+            margin: 0 0 15px 0;
+            color: #666;
+            font-size: 14px;
+        }
+
+        .username-dialog input {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 20px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            box-sizing: border-box;
+            transition: border-color 0.3s ease;
+        }
+
+        .username-dialog input:focus {
+            outline: none;
+            border-color: #4CAF50;
+            box-shadow: 0 0 5px rgba(76, 175, 80, 0.3);
+        }
+
+        .username-dialog button {
+            width: 100%;
+        }
     </style>
 </head>
 <body>
@@ -309,12 +366,25 @@
         </div>
     </main>
 
+    <!-- Username Dialog Modal -->
+    <div id="username-modal" class="username-modal" style="display: none;">
+        <div class="username-dialog" role="dialog" aria-labelledby="username-heading" aria-describedby="username-description">
+            <h2 id="username-heading">👤 Kies je gebruikersnaam</h2>
+            <p id="username-description">Voer een naam in voor deze ronde:</p>
+            <input type="text" id="username-input" placeholder="Bijvoorbeeld: Alice" maxlength="20" aria-label="Gebruikersnaam input">
+            <button id="username-submit" class="button">Bevestigen</button>
+        </div>
+    </div>
+
     <script>
         let ws;
         let myHand = [];
         let selectedCard = null;
         let selectedCardIndex = null;
         let hasSubmitted = false;
+        let hasVoted = false;
+        let myPlayerId = null;
+        let myPlayerName = null;
 
         function connect() {
             ws = new WebSocket(`ws://${window.location.host}/ws`);
@@ -353,6 +423,11 @@
         function handleMessage(data) {
             switch(data.type) {
                 case 'game_state':
+                    // On initial game_state, store player ID and show username dialog
+                    if (!myPlayerId && data.player_id) {
+                        myPlayerId = data.player_id;
+                        showUsernameDialog();
+                    }
                 case 'new_round':
                     document.getElementById('current-question').innerText = data.black_card;
                     announce(`Nieuwe kaart: ${data.black_card}`);
@@ -381,10 +456,12 @@
                     break;
                 case 'reveal':
                     announce('Alle kaarten zijn onthuld! Stem op je favoriet!');
+                    hasVoted = false;
                     hideWaitingOverlay();
                     revealCardsWithPlayerInfo(data.cards);
                     break;
                 case 'round_end':
+                    hideVotingWaitingOverlay();
                     announce(`${data.winning_player} wint de ronde met hun kaart! (${data.winning_votes} stem${data.winning_votes !== 1 ? 'men' : ''})`);
                     updateScoreboard(data.scoreboard);
                     setTimeout(() => {
@@ -392,7 +469,14 @@
                     }, 4000);
                     break;
                 case 'vote_received':
+                    updateVotingProgress(data.votes_so_far, data.total_voters);
                     announce(`${data.votes_so_far} van ${data.total_voters} spelers hebben gestemd`);
+                    break;
+                case 'username_set':
+                    if (data.success) {
+                        myPlayerName = data.player_name;
+                        announce(`Je gebruikersnaam is ingesteld op: ${data.player_name}`);
+                    }
                     break;
                 case 'player_joined':
                 case 'player_left':
@@ -627,6 +711,73 @@
             }
         }
 
+        function showVotingWaitingOverlay() {
+            // Remove existing overlay if any
+            hideVotingWaitingOverlay();
+            
+            const overlay = document.createElement('div');
+            overlay.className = 'waiting-overlay';
+            overlay.id = 'voting-waiting-overlay';
+            overlay.setAttribute('role', 'alert');
+            overlay.setAttribute('aria-labelledby', 'voting-waiting-heading');
+            overlay.innerHTML = `
+                <div class="waiting-content">
+                    <h2 id="voting-waiting-heading">🗳️ Wachten op stemmen...</h2>
+                    <div class="spinner" aria-hidden="true"></div>
+                    <p id="voting-progress">Jouw stem is geregistreerd!</p>
+                    <p>Wachten tot iedereen has gestemd.</p>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+            announce('Jouw stem is geregistreerd. Wachten op stemmen van anderen...');
+        }
+
+        function hideVotingWaitingOverlay() {
+            const overlay = document.getElementById('voting-waiting-overlay');
+            if (overlay) {
+                overlay.remove();
+            }
+        }
+
+        function updateVotingProgress(votes_so_far, total_voters) {
+            const progressEl = document.getElementById('voting-progress');
+            if (progressEl) {
+                const percent = total_voters > 0 ? Math.round((votes_so_far / total_voters) * 100) : 0;
+                progressEl.textContent = `Stemmen ontvangen: ${votes_so_far} van ${total_voters} (${percent}%)`;
+            }
+        }
+
+        function showUsernameDialog() {
+            const modal = document.getElementById('username-modal');
+            modal.style.display = 'flex';
+            const input = document.getElementById('username-input');
+            input.focus();
+            announce('Voer alstublieft je gebruikersnaam in');
+        }
+
+        function submitUsername() {
+            const input = document.getElementById('username-input');
+            const username = input.value.trim();
+            
+            if (!username) {
+                announce('Voer alstublieft een gebruikersnaam in');
+                input.focus();
+                return;
+            }
+            
+            // Send username to server
+            if (ws && myPlayerId) {
+                ws.send(JSON.stringify({
+                    type: 'set_username',
+                    username: username
+                }));
+                
+                // Hide modal
+                document.getElementById('username-modal').style.display = 'none';
+                announce(`Gebruikersnaam ingesteld op: ${username}`);
+            }
+        }
+
         function startNewRound() {
             if (ws) {
                 ws.send(JSON.stringify({ type: 'new_round' }));
@@ -693,17 +844,27 @@
                 return;
             }
             
+            if (hasVoted) {
+                announce('Je hebt al gestemd!');
+                return;
+            }
+            
             // Disable voting on all cards after voting
             document.querySelectorAll('.played-card.voting').forEach(c => {
                 c.style.pointerEvents = 'none';
                 c.style.opacity = '0.6';
             });
             
+            hasVoted = true;
+            
             ws.send(JSON.stringify({
                 type: 'vote_card',
                 card: card
             }));
             announce(`Je hebt gestemd op: ${extractCardText(card)}`);
+            
+            // Show voting waiting overlay
+            showVotingWaitingOverlay();
         }
 
         // Keep old function for backward compatibility
@@ -711,6 +872,14 @@
             const cardInfo = cards.map(c => ({ card: c}));
             revealCardsWithPlayerInfo(cardInfo);
         }
+
+        // Handle username dialog submission
+        document.getElementById('username-submit').addEventListener('click', submitUsername);
+        document.getElementById('username-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                submitUsername();
+            }
+        });
 
         // Start verbinding
         connect();
