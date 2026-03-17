@@ -347,6 +347,7 @@
             <h2 id="controls-heading" class="sr-only">Spel Controls</h2>
             <button class="btn" onclick="startNewRound()" aria-label="Start een nieuwe ronde">🔄 Nieuwe Ronde</button>
             <button class="btn" id="playBtn" onclick="playSelectedCard()" disabled aria-label="Dien de geselecteerde kaart in" aria-disabled="true">✅ Dien Kaart In</button>
+            <button class="btn" id="narratorBtn" onclick="toggleNarrator()" aria-label="Zet voorlezer aan of uit">🔊 Voorlezer: Aan</button>
         </section>
 
         <section class="hand-area" aria-labelledby="hand-heading">
@@ -368,11 +369,12 @@
 
     <!-- Username Dialog Modal -->
     <div id="username-modal" class="username-modal" style="display: none;">
-        <div class="username-dialog" role="dialog" aria-labelledby="username-heading" aria-describedby="username-description">
+        <div class="username-dialog" role="dialog" aria-modal="true" aria-labelledby="username-heading" aria-describedby="username-description">
             <h2 id="username-heading">👤 Kies je gebruikersnaam</h2>
             <p id="username-description">Voer een naam in voor deze ronde:</p>
-            <input type="text" id="username-input" placeholder="Bijvoorbeeld: Alice" maxlength="20" aria-label="Gebruikersnaam input">
-            <button id="username-submit" class="button">Bevestigen</button>
+            <label for="username-input" class="sr-only">Gebruikersnaam</label>
+            <input type="text" id="username-input" placeholder="Bijvoorbeeld: Alice" maxlength="20">
+            <button id="username-submit" class="btn">Bevestigen</button>
         </div>
     </div>
 
@@ -385,6 +387,33 @@
         let hasVoted = false;
         let myPlayerId = null;
         let myPlayerName = null;
+        let narratorEnabled = true;
+
+        function toggleNarrator() {
+            narratorEnabled = !narratorEnabled;
+            const btn = document.getElementById('narratorBtn');
+            
+            if (narratorEnabled) {
+                btn.innerText = '🔊 Voorlezer: Aan';
+            } else {
+                btn.innerText = '🔇 Voorlezer: Uit';
+                if ('speechSynthesis' in window) {
+                    window.speechSynthesis.cancel();
+                }
+            }
+        }
+
+        function speakText(text) {
+            if (!narratorEnabled) return;
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'nl-NL';
+                utterance.rate = 0.9;
+                utterance.pitch = 1.0;
+                window.speechSynthesis.speak(utterance);
+            }
+        }
 
         function connect() {
             ws = new WebSocket(`ws://${window.location.host}/ws`);
@@ -430,6 +459,7 @@
                     }
                 case 'new_round':
                     document.getElementById('current-question').innerText = data.black_card;
+                    speakText(data.black_card);
                     announce(`Nieuwe kaart: ${data.black_card}`);
                     myHand = data.hand;
                     selectedCardIndex = null;
@@ -538,9 +568,8 @@
             cardDiv.className = 'white-card';
             cardDiv.dataset.index = index;
             cardDiv.setAttribute('type', 'button');
-            cardDiv.setAttribute('role', 'option');
             cardDiv.setAttribute('aria-label', `Kaart ${index + 1}: ${extractCardText(card)}`);
-            cardDiv.setAttribute('tabindex', '0');
+            cardDiv.setAttribute('aria-pressed', 'false');
             
             // Create a container for the content
             const contentDiv = document.createElement('div');
@@ -618,9 +647,9 @@
                 const cardDiv = renderCard(card, index);
                 if (selectedCardIndex === index) {
                     cardDiv.classList.add('selected');
-                    cardDiv.setAttribute('aria-selected', 'true');
+                    cardDiv.setAttribute('aria-pressed', 'true');
                 } else {
-                    cardDiv.setAttribute('aria-selected', 'false');
+                    cardDiv.setAttribute('aria-pressed', 'false');
                 }
                 handDiv.appendChild(cardDiv);
             });
@@ -637,7 +666,7 @@
             // Remove previous selection
             document.querySelectorAll('.white-card').forEach(c => {
                 c.classList.remove('selected');
-                c.setAttribute('aria-selected', 'false');
+                c.setAttribute('aria-pressed', 'false');
             });
             
             // Select new card
@@ -646,7 +675,7 @@
             const selectedElement = document.querySelector(`[data-index="${index}"]`);
             if (selectedElement) {
                 selectedElement.classList.add('selected');
-                selectedElement.setAttribute('aria-selected', 'true');
+                selectedElement.setAttribute('aria-pressed', 'true');
             }
             
             const playBtn = document.getElementById('playBtn');
@@ -801,12 +830,10 @@
             
             shuffled.forEach((item, index) => {
                 const card = item.card ? item.card : item;
-                const cardDiv = document.createElement('article');
+                const cardDiv = document.createElement('button');
                 cardDiv.className = 'played-card card-reveal voting';
                 cardDiv.style.animationDelay = `${index * 0.1}s`;
-                cardDiv.setAttribute('role', 'group');
-                cardDiv.setAttribute('aria-label', `Ingediende kaart ${index + 1}`);
-                cardDiv.setAttribute('tabindex', '0');
+                cardDiv.setAttribute('aria-label', `Stem op kaart ${index + 1}`);
                 
                 // Make cards votable
                 cardDiv.onclick = () => voteForCard(card);

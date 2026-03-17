@@ -74,9 +74,13 @@ def start_new_round():
     game_state["card_to_player"] = {}
     game_state["revealed"] = False
     game_state["votes"] = {}
-    # Geef elke speler nieuwe witte kaarten
+    # Vul de hand van elke speler weer aan tot 5 kaarten
     for player_id in game_state["players"]:
-        game_state["players"][player_id]["hand"] = get_random_white_cards(5)
+        current_hand = game_state["players"][player_id].get("hand", [])
+        cards_needed = max(0, 5 - len(current_hand))
+        if cards_needed > 0:
+            new_cards = get_random_white_cards(cards_needed)
+            game_state["players"][player_id]["hand"] = current_hand + new_cards
     return game_state["current_black_card"]
 
 def get_scoreboard():
@@ -280,23 +284,37 @@ async def websocket_endpoint(websocket: WebSocket):
                             # Number of votes should equal number of cards submitted (each player votes once)
                             players_who_submitted = len(game_state["submitted_cards"])
                             if len(game_state["votes"]) == players_who_submitted:
-                                # Find the card with the most votes
+                                # Find the card(s) with the most votes
                                 vote_counts = {}
                                 for voted_card in game_state["votes"].values():
                                     vote_counts[voted_card] = vote_counts.get(voted_card, 0) + 1
                                 
-                                # Award points to the player whose card got the most votes
-                                winning_card = max(vote_counts, key=vote_counts.get)
-                                winning_player_id = game_state["card_to_player"].get(winning_card)
+                                # Find highest vote count
+                                max_votes = max(vote_counts.values())
                                 
-                                if winning_player_id in game_state["players"]:
-                                    game_state["players"][winning_player_id]["score"] += 1
+                                # Get all cards that got the max votes (handles ties)
+                                winning_cards = [card for card, votes in vote_counts.items() if votes == max_votes]
+                                
+                                winning_players = []
+                                for winning_card in winning_cards:
+                                    winning_player_id = game_state["card_to_player"].get(winning_card)
+                                    if winning_player_id in game_state["players"]:
+                                        game_state["players"][winning_player_id]["score"] += 1
+                                        winning_players.append(game_state["players"][winning_player_id]["name"])
+                                    else:
+                                        winning_players.append("Een vertrokken speler")
+                                
+                                # Format names if there's a tie
+                                if len(winning_players) > 1:
+                                    winning_player_names = " en ".join([", ".join(winning_players[:-1]), winning_players[-1]]) if len(winning_players) > 2 else " en ".join(winning_players)
+                                else:
+                                    winning_player_names = winning_players[0]
                                 
                                 await manager.broadcast(json.dumps({
                                     "type": "round_end",
-                                    "winning_card": winning_card,
-                                    "winning_player": game_state["players"][winning_player_id]["name"],
-                                    "winning_votes": vote_counts[winning_card],
+                                    "winning_card": winning_cards[0], # Show one of the winning cards
+                                    "winning_player": winning_player_names,
+                                    "winning_votes": max_votes,
                                     "scoreboard": get_scoreboard()
                                 }))
                         else:
